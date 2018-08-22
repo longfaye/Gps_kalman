@@ -1,35 +1,32 @@
 package com.kpo.mcu.mcucontrols;
 
 import android.content.Context;
+import android.os.Handler;
 import android.widget.Toast;
-
-import com.kpo.libmcu.SerialPort;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import com.kpo.libmcu.SerialPort;
 
-/**
- * Created by kp on 2016/5/13.
+/*
+ * Created by kp on 2015/12/14.
  */
-public class GpioPin {
-    private static GpioPin pin;
+public class CANProxy {
 
-    private static String DEVICE_PATH = "/dev/mcu2ttyS6";
+    private byte[] ba = new byte[1024];
+    private byte[] bb = new byte[32];
+    private int positon = 0;
+    private int limit = 0;
+
+    private static CANProxy Proxy;
+    private static String DEVICE_PATH = "/dev/mcu2ttyS7";
     private static int DEVICE_RATE = 115200;
     int databit = 0;
     int stopbit = 0;
     int parity = 0;
-
     private Context mContext;
-
-    private byte[] ba = new byte[1024];
-    private byte[] bb = new byte[32];
-    private byte[] value = null;
-    private int num = 0;
-    private int positon = 0;
-    private int limit = 0;
-
+    private Handler mHandler;
 
     private SerialPort mSerialPort = null;
     private InputStream mInputStream;
@@ -37,19 +34,27 @@ public class GpioPin {
     private ReadThread mReadThread;
     private static byte[] BUFFER = new byte[1024];
 
-    public static GpioPin getInstance(Context context){
-        if(pin == null){
-            pin = new GpioPin(context);
+    public static CANProxy getInstance(Context context){
+        if(Proxy == null){
+            Proxy = new CANProxy(context);
         }
 
-        return pin;
+        return Proxy;
     }
 
-    private GpioPin(Context context){
+    private CANProxy(Context context){
         this.mContext = context;
     }
 
-    public void Open() {
+    public void setHandler(Handler handler){
+        this.mHandler = handler;
+    }
+
+    public Handler getHandler(){
+        return this.mHandler;
+    }
+
+    public void getSerialPort() {
         if (mSerialPort != null) {
             Comm_Exit();
         }
@@ -71,22 +76,49 @@ public class GpioPin {
         }
     }
 
-    public int getGPIOnum(){
-        return num;
-    }
+    public void SetID(byte[] frame, String id, int frameType, int frameForm){
+        frame[0] = CANproperty.CAN_WriteData;
 
-    public byte[] getGPIOarray(){
-        return value;
-    }
-
-    public byte getGPIOvalue(int index){
-        if(value!=null && num>0) {
-            if(index>=0 && index<num) {
-                return value[index];
-            }
+        for(int i=0; i<4; i++){
+            byte high = (byte)(Character.digit(id.charAt(2*i), 16)&0xff);
+            byte low = (byte)(Character.digit(id.charAt(2*i+1), 16)&0xff);
+            frame[i+1] = (byte)(high<<4|low);
         }
 
-        return -1;
+        frame[5] = (byte)frameType;
+        frame[6] = (byte)frameForm;
+    }
+
+    public void SendString(byte[] template, String sendata)
+    {
+        byte[] result = new byte[7+sendata.length()];
+        System.arraycopy(template, 0, result, 0, 7);
+
+        for(int i=0; i<sendata.length(); i++){
+            result[i+7] = (byte)(Character.digit(sendata.charAt(i), 16));
+        }
+
+        SendCmd(result);
+    }
+
+    public void SendByte(byte[] template, byte[] sendata)
+    {
+        byte[] result = new byte[7+sendata.length];
+        System.arraycopy(template, 0, result, 0, 7);
+        System.arraycopy(sendata, 0, result, 7, sendata.length);
+
+        SendCmd(result);
+    }
+
+    private byte[] Splice(byte[] frame, String send){
+        byte[] result = new byte[7+send.length()];
+        System.arraycopy(frame, 0, result, 0, 7);
+
+        for(int i=0; i<send.length(); i++){
+            result[i+7] = (byte)(Character.digit(send.charAt(i), 16));
+        }
+
+        return result;
     }
 
     private class ReadThread extends Thread {
@@ -134,7 +166,7 @@ public class GpioPin {
 
             while (!isInterrupted()) {
                 try {
-                    Thread.sleep(200);
+                    Thread.sleep(10);
 
                     int size = mInputStream.read(BUFFER);
                     if (size > 0) {
@@ -145,12 +177,7 @@ public class GpioPin {
                             if(ba[i]==0x0d && i+1<limit && ba[i+1]==0x0a){
                                 byte[] frame = new byte[i-j];
                                 System.arraycopy(ba, j, frame, 0, i - j);
-                                num = frame[0];
-                                if(value==null){
-                                    value = new byte[num];
-                                    System.out.println(num+" gpio");
-                                }
-                                System.arraycopy(frame, 1, value, 0, num);
+                                mHandler.obtainMessage(0, frame).sendToTarget();
 
                                 i += 2;
                                 j = i;
@@ -166,15 +193,31 @@ public class GpioPin {
                     e.printStackTrace();
                     return;
                 }catch (InterruptedException e){
-                    //e.printStackTrace();
-                    Thread.interrupted();
+                    e.printStackTrace();
                     return;
                 }
             }
         }
     }
 
-    private void Comm_Exit() {
+    public void stopThread(){
+        if(mReadThread != null) mReadThread.onPause();
+    }
+
+    public void startThread(){
+        if(mReadThread != null) mReadThread.onResume();
+    }
+
+    public void SendCmd(byte[] _cmd) {
+        try {
+            if(mOutputStream != null) mOutputStream.write(_cmd);
+        } catch (IOException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+    }
+
+    public void Comm_Exit() {
         if (mReadThread != null) {
             mReadThread.onResume();
             mReadThread.interrupt();
