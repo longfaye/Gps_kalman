@@ -67,6 +67,25 @@ public class MainActivity extends AppCompatActivity {
     private  int 		    maltitude;		//高度	海拔高度，单位米
     private  int			mdirection;		//方向	0~359°，正北为0,顺时针
     private  String		    mtime;			//时间	yyyy-MM-dd HH:mm:ss
+    /*
+    Initialising values in Kalman filter
+    */
+    double KGLat; //kalman gain
+    double KGLon; //kalman gain
+    double ErrEst = 3; // Error in Estimation 8 meter dvs 0,00007186 degrees
+    double ErrMea = 5; // Error in Measurment 10 meter dvs 0,00008983 degrees
+    double preEstLat = 55.6; //Previous Estimated Value
+    double preEstLon = 12.99; //Previous Estimated Value
+    double outputEstLat; // New estimated value
+    double outputEstLon; // New estimated value
+    double newErrorEstLat; //new Error Estimation
+    double newErrorEstLon; //new Error Estimation
+    double identityEst = 1;
+    double degrees = 11.100;
+    int valueLat = 0;
+    int valueLon = 0;
+    double latitude;
+    double longitude;
 
     LocationListener locationListener = new LocationListener(){
 
@@ -81,7 +100,10 @@ public class MainActivity extends AppCompatActivity {
                 mConnected = true;
             }
             mLocInfo = loc;
-            GetfixPoint();
+            preEstLat = mLocInfo.getLatitude()-0.0003717817536;
+            preEstLon = mLocInfo.getLongitude()-0.0001141589793;
+            //GetfixPoint();
+            //GetKmGpspoint();
         }
 
         @Override
@@ -132,6 +154,7 @@ public class MainActivity extends AppCompatActivity {
                 //updateNmea2TXT(nmea);
                 refreshNmeaView(mGpSNmea,(formatter.format(System.currentTimeMillis())+" ")+nmea);
                 //SendCmd(nmea.getBytes());
+                GetKmGpspoint();
                 //GetfixPoint();
             }
         }
@@ -153,6 +176,94 @@ public class MainActivity extends AppCompatActivity {
         mStatusStr += content + "\n";
         if (mGpSNmea != null) {
             mGpSNmea.setText(mStatusStr);
+        }
+    }
+
+    /*
+    Calculate Kalman Gain
+     */
+    private void KalmanGainLon(double errEst, double errMea) {
+
+        KGLon = errEst / (errEst + errMea);
+        //  ((TextView)(findViewById(R.id.KalmanLon))).setText("KalmanGain_Longitude" +" " + KGLon);
+        //mfixStatusTv.setText("KalmanGain_Longitude" +" " + KGLon);
+        newValueLon(this.preEstLon,longitude,KGLon);
+    }
+
+    /*
+   Calculate Kalman Gain
+    */
+    private void KalmanGainLat(double errEst, double errMea) {
+
+        KGLat = errEst / (errEst + errMea);
+        newValueLat(this.preEstLat,latitude,KGLat);
+    }
+
+    /*
+  Calculate Current Estimated Value
+   */
+    private void newValueLat(double preEst, double meaValue, double KG) {
+        if (valueLat < 2) {
+            outputEstLat = preEst + (KG * (meaValue - preEst));
+            this.preEstLat = outputEstLat;
+            newErrorLat(this.ErrEst, KG);
+            valueLat ++;
+        }
+        else if (valueLat == 2){
+            valueLat =0; //kommer fram till en estimated value after 5 iterations
+
+        }
+
+
+    }
+
+    /*
+Calculate New Estimated Error
+ */
+    private void newErrorLat(double errEst, double KG) {
+
+        newErrorEstLat = (identityEst - KG)* errEst;
+        this.ErrEst = newErrorEstLat;
+    }
+
+    /*
+Calculate New Estimated Error
+*/
+    private void newErrorLon(double errEst, double KG) {
+
+        newErrorEstLon = (identityEst - KG)* errEst;
+        this.ErrEst = newErrorEstLon;
+    }
+
+    /*
+Calculate Current Estimated Value
+*/
+    private void newValueLon(double preEst, double meaValue, double KG) {
+
+        if (valueLon < 2){
+            outputEstLon = preEst + (KG*(meaValue - preEst));
+            this.preEstLon = outputEstLon;
+            newErrorLon(this.ErrEst,KG);
+            valueLon ++;
+        }
+        else if (valueLon == 2){
+            mfixStatusTv.setText("New_Latitude " + outputEstLat + " New_Longitude " +" " + outputEstLon);
+            //setUpdatedpos();
+            valueLon = 0;
+        }
+    }
+
+    public void GetKmGpspoint(){
+        if (mLocInfo != null) {
+            // Log.d("Accuracy", String.valueOf(location.getAccuracy()/degrees));
+            latitude = mLocInfo.getLatitude();
+            longitude = mLocInfo.getLongitude();
+            Log.d(mTag,  "-----------------------------------------------------Viewing current location");
+            Log.d(mTag, "-----------------------------------------------------" + mLocInfo.getLatitude());
+            Log.d(mTag, "-----------------------------------------------------" + mLocInfo.getLongitude());
+            KalmanGainLat(ErrEst,ErrMea);
+            KalmanGainLon(ErrEst,ErrMea);
+
         }
     }
 
