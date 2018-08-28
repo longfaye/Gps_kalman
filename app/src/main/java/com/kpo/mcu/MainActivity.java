@@ -9,7 +9,6 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.location.LocationProvider;
 import android.os.Bundle;
-import android.provider.Settings;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
 import android.support.v7.app.AppCompatActivity;
@@ -18,18 +17,12 @@ import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.TextView;
-import android.widget.Toast;
 
-import com.kpo.libmcu.SerialPort;
-import com.kpo.mcu.Util.GpsPointInfo;
 import com.kpo.mcu.Util.MapFixUtil;
-import com.kpo.mcu.Util.Writelog;
 import com.kpo.mcu.gpssmooth.GeoTrackFilter;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
@@ -40,15 +33,13 @@ import java.util.TimerTask;
 public class MainActivity extends AppCompatActivity {
     private final String mTag = "KPOCOM_GPS";
     Button bt;
+    private TextView mGpSNmea, mfixStatusTv;
     TextView tv;
     boolean start = false;
     File SavaFile = null;
     RandomAccessFile raf = null;
     Timer timer = null;
     SimpleDateFormat formatter = new SimpleDateFormat("MM-dd HH:mm:ss", Locale.CHINA);
-
-    private TextView mGpSNmea, mfixStatusTv;
-    private String mStatusStr = "";
 
     /*GPSConstantPermission*/
     private static final int MY_PERMISSION_ACCESS_COARSE_LOCATION = 11;
@@ -57,48 +48,14 @@ public class MainActivity extends AppCompatActivity {
     /*Position*/
     private static final int MINIMUM_TIME = 1000;//1s
     private static final int MINIMUM_DISTANCE = 10;//10m
-
+    private  String		    mtime;			//时间	yyyy-MM-dd HH:mm:ss
     /*GPS*/
     private LocationManager mLocationManager;
     private Location mLocInfo = null;
-
-    private  int			mlatitude;		//纬度	1/10000分
-    private  int			mlongitude;		//经度	1/10000分
-    private  int			mspeed;			//速度	1/10KM/H
-    private  int 		    maltitude;		//高度	海拔高度，单位米
-    private  int			mdirection;		//方向	0~359°，正北为0,顺时针
-    private  String		    mtime;			//时间	yyyy-MM-dd HH:mm:ss
     /*
     Initialising values in Kalman filter
     */
-    double KGLat; //kalman gain
-    double KGLon; //kalman gain
-    double ErrEst = 3; // Error in Estimation 8 meter dvs 0,00007186 degrees
-    double ErrMea = 5; // Error in Measurment 10 meter dvs 0,00008983 degrees
-    double preEstLat = 55.6; //Previous Estimated Value
-    double preEstLon = 12.99; //Previous Estimated Value
-    double outputEstLat; // New estimated value
-    double outputEstLon; // New estimated value
-    double newErrorEstLat; //new Error Estimation
-    double newErrorEstLon; //new Error Estimation
-    double identityEst = 1;
-    double degrees = 11.100;
-    int valueLat = 0;
-    int valueLon = 0;
-    double latitude;
-    double longitude;
-
-
-    private long id = -1;
-
-    private boolean detectionReady = false;
-    private int detectionHelper = 0;
-    private int avgSpeedHelper = 0;
-    private boolean mLocationStarted = false;
-    private boolean mLocationConnected = true;
     private boolean mTrackingStarted = false;
-
-    private int activityType = 0;
     private Location lastLocation;
     private long lastLocationEntry = -1;
     private boolean mLastLocation = false;
@@ -107,41 +64,47 @@ public class MainActivity extends AppCompatActivity {
     private GeoTrackFilter geoTrackFilter;
 
     LocationListener locationListener = new LocationListener(){
-
         @Override
         public void onLocationChanged(Location location) {
-            refreshNmeaView(mfixStatusTv, "Init_Latitude:" + location.getLatitude() + " Init_Longitude:"+ location.getLongitude()+"\n");
+            mLocInfo = location;
+            if(start) {
+                refreshNmeaView(mfixStatusTv, "Init_Lat:" + location.getLatitude() + " Init_Lon:" + location.getLongitude() + " Accuracy:"+ location.getAccuracy()+"\n");
+                if (mLocInfo.getAccuracy() <= minimumAccuracy) {
+                    GetCorPoint();
+                }
+            }
             if (location.hasAccuracy() && location.getAccuracy() <= minimumAccuracy) {
                 long difftime = 0l;
-                float distance_diff = 0f;
                 double speed;
                 if(mLastLocation) {
                     difftime = location.getTime() - lastLocation.getTime();
-                    distance_diff = location.distanceTo(lastLocation);
                 }
 
                 if(!mLastLocation) {
                     mLastLocation = true;
                     //Add first values to kalman filter
-                    geoTrackFilter.update_velocity2d(location.getLatitude(), location.getLongitude(), 0);
-                    refreshNmeaView(mfixStatusTv, "New_Latitude:" + geoTrackFilter.get_lat_long()[0] + " New_Longitude: " + geoTrackFilter.get_lat_long()[1]+"\n");
-                    //Add first entry
-                    //createLocation(idTrace, location.getTime(), 0, location.getLatitude(), location.getLongitude(), 0, 0, activityType);
+                    geoTrackFilter.update_velocity2d(location.getLatitude(), location.getLongitude(), location.getTime());
+                    if(start) {
+                        refreshNmeaView(mfixStatusTv, "Newfirt_Lat:" + geoTrackFilter.get_lat_long()[0] + " Newfirst_Lon: " + geoTrackFilter.get_lat_long()[1] + "\n");
+                    }
                 } else {
                     //Kalman filter
                     geoTrackFilter.update_velocity2d(location.getLatitude(), location.getLongitude(), difftime/1000);
                     double[] latLon = geoTrackFilter.get_lat_long();
                     speed = geoTrackFilter.get_speed();
+                    location.setLatitude(latLon[0]);
+                    location.setLongitude(latLon[1]);
                     location.setSpeed((float) speed);
-                    refreshNmeaView(mfixStatusTv, "New_Latitude1 " + latLon[0] + " New_Longitude1 " + latLon[1]+"\n");
-                    //lastLocationEntry = createLocation(idTrace, location.getTime(), difftime, latLon[0], latLon[1], distance_diff, speed, activityType);
-                    //coordinateList.add(new LatLng(latLon[0], latLon[1]));
+                    if(start) {
+                        //refreshNmeaView(mfixStatusTv, "New_Latitude " + latLon[0] + " New_Longitude " + latLon[1]+"\n");
+                    }
                 }
-                lastLocation = location;
             }
-            //refreshNmeaView(mfixStatusTv,"时间:"+location.getTime() +" 经度:"+Double.doubleToRawLongBits(location.getLatitude())
-            //        + "纬度:"+Double.doubleToRawLongBits(location.getLongitude())+"\n");
-            refreshNmeaView(mfixStatusTv,"时间:"+location.getTime() +" 经度:"+ location.getLatitude()+ "纬度:"+location.getLongitude()+"\n");
+            lastLocation = location;
+            if(start) {
+                Log.d(mTag, "KalMan时间:" + location.getTime() + " 经度:" + location.getLatitude() + "纬度:" + location.getLongitude() + "\n");
+                refreshNmeaView(mfixStatusTv, "last时间:" + location.getTime() + " 经度:" + location.getLatitude() + "纬度:" + location.getLongitude() + "\n");
+            }
         }
 
         @Override
@@ -170,7 +133,6 @@ public class MainActivity extends AppCompatActivity {
                     break;
                 case LocationProvider.AVAILABLE:
                     Log.d("GPS-NMEA",""+ provider + "");
-
                     break;
             }
         }
@@ -189,11 +151,7 @@ public class MainActivity extends AppCompatActivity {
                 }catch(IOException e){
                     e.printStackTrace();
                 }
-                //updateNmea2TXT(nmea);
                 refreshNmeaView(mGpSNmea,(formatter.format(System.currentTimeMillis())+" ")+nmea);
-                //SendCmd(nmea.getBytes());
-                //GetKmGpspoint();
-                //GetfixPoint();
             }
         }
     };
@@ -206,24 +164,10 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /**
-     * 更新监控台的输出NMEA信息
-     * @param content 更新内容
-     */
-    private void updateNmea2TXT(String content) {
-        mStatusStr += content + "\n";
-        if (mGpSNmea != null) {
-            mGpSNmea.setText(mStatusStr);
-        }
-    }
-
     public void startNewTraining(){
         mTrackingStarted = true;
         mLastLocation = false;
-        detectionHelper = 0;
-        avgSpeedHelper = 0;
         minimumAccuracy = Long.parseLong("10");
-
         //Init kalman filter
         //double kalman_speed = Double.parseDouble("1.0");
         float kalman_speed = Float.parseFloat("1.0");
@@ -233,7 +177,6 @@ public class MainActivity extends AppCompatActivity {
     public void stopTraining(){
         if(mTrackingStarted) {
             mTrackingStarted = false;
-
             //Reset variables
             if(mLastLocation)
                 lastLocation.reset();
@@ -242,7 +185,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    public void GetsmoothPoint() {
+    public void GetCorPoint() {
         double lon =0;
         double lat =0;
         double correctLon =0;
@@ -271,210 +214,9 @@ public class MainActivity extends AppCompatActivity {
         int min = cal.get(Calendar.MINUTE);
         int sec = cal.get(Calendar.SECOND);
         mtime = String.format("%d-%02d-%02d %02d:%02d:%02d", year,month, day, hour, min, sec);
-        //Writelog.i(mTag, "经度:%f,纬度:%f,方向:%d,时间:%s", mlongitude, mlatitude, mdirection, mtime);
-        refreshNmeaView(mfixStatusTv,"时间:"+mtime +" 经度:"+correctLat+ "纬度:"+correctLon+"\n");
+        refreshNmeaView(mfixStatusTv,"Mapfix时间:"+mtime +" 经度:"+correctLat+ "纬度:"+correctLon+"\n");
     }
 
-    /*
-    Calculate Kalman Gain
-     */
-    private void KalmanGainLon(double errEst, double errMea) {
-
-        KGLon = errEst / (errEst + errMea);
-        //  ((TextView)(findViewById(R.id.KalmanLon))).setText("KalmanGain_Longitude" +" " + KGLon);
-        //mfixStatusTv.setText("KalmanGain_Longitude" +" " + KGLon);
-        newValueLon(this.preEstLon,longitude,KGLon);
-    }
-
-    /*
-   Calculate Kalman Gain
-    */
-    private void KalmanGainLat(double errEst, double errMea) {
-
-        KGLat = errEst / (errEst + errMea);
-        newValueLat(this.preEstLat,latitude,KGLat);
-    }
-
-    /*
-  Calculate Current Estimated Value
-   */
-    private void newValueLat(double preEst, double meaValue, double KG) {
-        if (valueLat < 2) {
-            outputEstLat = preEst + (KG * (meaValue - preEst));
-            this.preEstLat = outputEstLat;
-            newErrorLat(this.ErrEst, KG);
-            valueLat ++;
-        }
-        else if (valueLat == 2){
-            valueLat =0; //kommer fram till en estimated value after 5 iterations
-
-        }
-
-
-    }
-
-    /*
-Calculate New Estimated Error
- */
-    private void newErrorLat(double errEst, double KG) {
-
-        newErrorEstLat = (identityEst - KG)* errEst;
-        this.ErrEst = newErrorEstLat;
-    }
-
-    /*
-Calculate New Estimated Error
-*/
-    private void newErrorLon(double errEst, double KG) {
-
-        newErrorEstLon = (identityEst - KG)* errEst;
-        this.ErrEst = newErrorEstLon;
-    }
-
-    /*
-Calculate Current Estimated Value
-*/
-    private void newValueLon(double preEst, double meaValue, double KG) {
-
-        if (valueLon < 2){
-            outputEstLon = preEst + (KG*(meaValue - preEst));
-            this.preEstLon = outputEstLon;
-            newErrorLon(this.ErrEst,KG);
-            valueLon ++;
-        }
-        else if (valueLon == 2){
-            mfixStatusTv.setText("New_Latitude " + outputEstLat + " New_Longitude " +" " + outputEstLon);
-            //setUpdatedpos();
-            valueLon = 0;
-        }
-    }
-
-    public void GetKmGpspoint(){
-        if (mLocInfo != null) {
-            // Log.d("Accuracy", String.valueOf(location.getAccuracy()/degrees));
-            latitude = mLocInfo.getLatitude();
-            longitude = mLocInfo.getLongitude();
-            Log.d(mTag,  "-----------------------------------------------------Viewing current location");
-            Log.d(mTag, "-----------------------------------------------------" + mLocInfo.getLatitude());
-            Log.d(mTag, "-----------------------------------------------------" + mLocInfo.getLongitude());
-            KalmanGainLat(ErrEst,ErrMea);
-            KalmanGainLon(ErrEst,ErrMea);
-
-        }
-    }
-
-    private boolean mConnected = false;
-    public boolean getConnected() {
-        return mConnected;
-    }
-
-    public boolean isGPSEnable() {
-        String str = Settings.Secure.getString(getContentResolver(), Settings.Secure.LOCATION_PROVIDERS_ALLOWED);
-        // Writelog.v(mTag, str);
-        if (str != null) {
-            return str.contains("gps");
-        } else {
-            return false;
-        }
-    }
-    public float getSpeed() {
-        float i = 0.00f;
-
-        if (mLocInfo == null) {
-            i = 0.00f;
-        } else {
-            i = (mLocInfo.getSpeed() * 36 / 10);
-        }
-        return i;
-    }
-
-    public float getBearing() {
-        if (mLocInfo == null)
-            return 0.00f;
-        else
-            return mLocInfo.getBearing();
-    }
-
-    public void GetfixPoint() {
-        double lon =0;
-        double lat =0;
-        double correctLon =0;
-        double correctLat =0;
-        Calendar cal = Calendar.getInstance();
-        mtime = "2015-01-01 00:00:00";
-        if (mLocInfo != null) {
-            // 纠偏前的经度
-            lon = mLocInfo.getLongitude();
-            // 纠偏前的纬度
-            lat = mLocInfo.getLatitude();
-            double fixpoint[] = MapFixUtil.transform(lat, lon);
-            // 纠偏后的经度
-            correctLon = fixpoint[1];
-            // 纠偏后的纬度
-            correctLat = fixpoint[0];
-        }
-        Log.d(mTag, "纠偏前的经度：" + lon + ",纠偏前的纬度：" + lat);
-        Log.d(mTag, "纠偏后的经度：" + correctLon + ",纠偏后的纬度：" + correctLat);
-        // 时间BCD[6] yyy-MM-dd HH:mm:ss
-        int year = cal.get(Calendar.YEAR);
-        int month = cal.get(Calendar.MONTH) + 1;
-        int day = cal.get(Calendar.DAY_OF_MONTH);
-        int hour = cal.get(Calendar.HOUR_OF_DAY);
-        int min = cal.get(Calendar.MINUTE);
-        int sec = cal.get(Calendar.SECOND);
-        mtime = String.format("%d-%02d-%02d %02d:%02d:%02d", year,month, day, hour, min, sec);
-        //Writelog.i(mTag, "经度:%f,纬度:%f,方向:%d,时间:%s", mlongitude, mlatitude, mdirection, mtime);
-        refreshNmeaView(mfixStatusTv,"时间:"+mtime +" 经度:"+correctLat+ "纬度:"+correctLon+"\n");
-    }
-
-    public GpsPointInfo GetGpsPoint() {
-        double latitude = 0;
-        double longitude = 0;
-        int direction = 0;
-        Calendar cal = Calendar.getInstance();
-        GpsPointInfo point = new GpsPointInfo();
-        point.time = "2015-01-01 00:00:00";
-        if (mLocInfo != null) {
-            // double d;
-            latitude = mLocInfo.getLatitude();
-            longitude = mLocInfo.getLongitude();
-            direction  = (int) mLocInfo.getBearing();
-            point.latitude = (int) (latitude * 600000.00f);
-            point.longitude = (int) (longitude * 600000.00f);
-
-            // 经度 1/10000分
-            if (mConnected) {
-                point.speed = (int) (mLocInfo.getSpeed() * 36.00f);
-            } else {
-                point.speed = 0;
-            }
-            // 高度 UINT16 海拔高度，单位米
-            point.altitude = (int) (mLocInfo.getAltitude());
-            // 方向0—178,刻度为2度，正北为0，顺时针
-            point.direction = direction/2;
-        }
-
-        // 时间BCD[6] yyy-MM-dd HH:mm:ss
-        int year = cal.get(Calendar.YEAR);
-        int month = cal.get(Calendar.MONTH) + 1;
-        int day = cal.get(Calendar.DAY_OF_MONTH);
-        int hour = cal.get(Calendar.HOUR_OF_DAY);
-        int min = cal.get(Calendar.MINUTE);
-        int sec = cal.get(Calendar.SECOND);
-        point.time = String.format("%d-%02d-%02d %02d:%02d:%02d", year,month, day, hour, min, sec);
-        Writelog.i(mTag, "经度:%f,纬度:%f,方向:%d,时间:%s", longitude, latitude, direction, point.time);
-        return point;
-    }
-
-    private SerialPort mSerialPort = null;
-    private InputStream mInputStream;
-    private OutputStream mOutputStream;
-
-    String path = "/dev/ttyMT0";
-    int baudrate = 115200;
-    int databit = 0;
-    int stopbit = 0;
-    int parity = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -495,8 +237,6 @@ Calculate Current Estimated Value
                 }else{
                     bt.setText("停止");
                     start = true;
-
-                    getSerialPort(path, baudrate, databit, stopbit, parity);
 
                     if(timer == null) {
                         timer = new Timer();
@@ -534,16 +274,12 @@ Calculate Current Estimated Value
     @Override
     protected void onStart() {
         super.onStart();
-
         //API23:we have to check if ACCESS_FINE_LOCATION and/or ACCESS_COARSE_LOCATION permission are granted
         if(ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
                 ||ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED){
             mLocationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, MINIMUM_TIME, MINIMUM_DISTANCE, locationListener);
             mLocationManager.addNmeaListener(nmeaListener);
-
-            //One or both permissions are denied.
         }else{
-
             //The ACCESS_COARSE_LOCATION is denied, then I request it and manage the result in
             //onRequestPermissionsResult() using the constant MY_PERMISSION_ACCESS_FINE_LOCATION
             if(ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)!=PackageManager.PERMISSION_GRANTED){
@@ -554,7 +290,6 @@ Calculate Current Estimated Value
             if(ContextCompat.checkSelfPermission(this,Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED){
                 ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, MY_PERMISSION_ACCESS_FINE_LOCATION);
             }
-
         }
     }
 
@@ -565,47 +300,11 @@ Calculate Current Estimated Value
             timer.cancel();
             timer = null;
         }
-
+        stopTraining();
         mLocationManager.removeUpdates(locationListener);
         mLocationManager.removeNmeaListener(nmeaListener);
 
         super.onStop();
-        Comm_Exit();
-    }
-
-    public boolean getSerialPort(String path, int baudrate, int databit, int stopbit, int parity) {
-        if (mSerialPort != null) {
-            Comm_Exit();
-        }
-
-        try{
-            //mSerialPort = new SerialPort(path, baudrate, 0);
-            mSerialPort = new SerialPort(path, baudrate, databit, stopbit, parity);
-            mInputStream = mSerialPort.getInputStream();
-            mOutputStream = mSerialPort.getOutputStream();
-        } catch (IOException e) {
-            // TODO Auto-generated catch block
-            Toast.makeText(getBaseContext(), "The serial port can not be opened for an unknown reason.",Toast.LENGTH_SHORT).show();
-            return false;
-        }
-
-        return true;
-    }
-
-    public void Comm_Exit() {
-        if (mSerialPort != null) {
-            mSerialPort.ReleasePort();
-            mSerialPort = null;
-        }
-    }
-
-    public void SendCmd(byte[] _cmd) {
-        try {
-            if(mOutputStream != null) mOutputStream.write(_cmd);
-        } catch (IOException e) {
-            // TODO Auto-generated catch block
-            e.printStackTrace();
-        }
     }
 
     @Override
