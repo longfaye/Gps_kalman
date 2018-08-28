@@ -24,6 +24,7 @@ import com.kpo.libmcu.SerialPort;
 import com.kpo.mcu.Util.GpsPointInfo;
 import com.kpo.mcu.Util.MapFixUtil;
 import com.kpo.mcu.Util.Writelog;
+import com.kpo.mcu.gpssmooth.GeoTrackFilter;
 
 import java.io.File;
 import java.io.IOException;
@@ -87,23 +88,60 @@ public class MainActivity extends AppCompatActivity {
     double latitude;
     double longitude;
 
+
+    private long id = -1;
+
+    private boolean detectionReady = false;
+    private int detectionHelper = 0;
+    private int avgSpeedHelper = 0;
+    private boolean mLocationStarted = false;
+    private boolean mLocationConnected = true;
+    private boolean mTrackingStarted = false;
+
+    private int activityType = 0;
+    private Location lastLocation;
+    private long lastLocationEntry = -1;
+    private boolean mLastLocation = false;
+    private long idTrace = -1;
+    private long minimumAccuracy;
+    private GeoTrackFilter geoTrackFilter;
+
     LocationListener locationListener = new LocationListener(){
 
         @Override
-        public void onLocationChanged(Location loc) {
-            //TODO Auto-generated method stub
-            //定位資料更新時會回呼
-            if (loc==null) {
-                mConnected = false;
-                Log.i(mTag, "GPSStatus:" + false);
-            }else {
-                mConnected = true;
+        public void onLocationChanged(Location location) {
+            refreshNmeaView(mfixStatusTv, "Init_Latitude:" + location.getLatitude() + " Init_Longitude:"+ location.getLongitude()+"\n");
+            if (location.hasAccuracy() && location.getAccuracy() <= minimumAccuracy) {
+                long difftime = 0l;
+                float distance_diff = 0f;
+                double speed;
+                if(mLastLocation) {
+                    difftime = location.getTime() - lastLocation.getTime();
+                    distance_diff = location.distanceTo(lastLocation);
+                }
+
+                if(!mLastLocation) {
+                    mLastLocation = true;
+                    //Add first values to kalman filter
+                    geoTrackFilter.update_velocity2d(location.getLatitude(), location.getLongitude(), 0);
+                    refreshNmeaView(mfixStatusTv, "New_Latitude:" + geoTrackFilter.get_lat_long()[0] + " New_Longitude: " + geoTrackFilter.get_lat_long()[1]+"\n");
+                    //Add first entry
+                    //createLocation(idTrace, location.getTime(), 0, location.getLatitude(), location.getLongitude(), 0, 0, activityType);
+                } else {
+                    //Kalman filter
+                    geoTrackFilter.update_velocity2d(location.getLatitude(), location.getLongitude(), difftime/1000);
+                    double[] latLon = geoTrackFilter.get_lat_long();
+                    speed = geoTrackFilter.get_speed();
+                    location.setSpeed((float) speed);
+                    refreshNmeaView(mfixStatusTv, "New_Latitude1 " + latLon[0] + " New_Longitude1 " + latLon[1]+"\n");
+                    //lastLocationEntry = createLocation(idTrace, location.getTime(), difftime, latLon[0], latLon[1], distance_diff, speed, activityType);
+                    //coordinateList.add(new LatLng(latLon[0], latLon[1]));
+                }
+                lastLocation = location;
             }
-            mLocInfo = loc;
-            preEstLat = mLocInfo.getLatitude()-0.0003717817536;
-            preEstLon = mLocInfo.getLongitude()-0.0001141589793;
-            //GetfixPoint();
-            //GetKmGpspoint();
+            //refreshNmeaView(mfixStatusTv,"时间:"+location.getTime() +" 经度:"+Double.doubleToRawLongBits(location.getLatitude())
+            //        + "纬度:"+Double.doubleToRawLongBits(location.getLongitude())+"\n");
+            refreshNmeaView(mfixStatusTv,"时间:"+location.getTime() +" 经度:"+ location.getLatitude()+ "纬度:"+location.getLongitude()+"\n");
         }
 
         @Override
@@ -154,7 +192,7 @@ public class MainActivity extends AppCompatActivity {
                 //updateNmea2TXT(nmea);
                 refreshNmeaView(mGpSNmea,(formatter.format(System.currentTimeMillis())+" ")+nmea);
                 //SendCmd(nmea.getBytes());
-                GetKmGpspoint();
+                //GetKmGpspoint();
                 //GetfixPoint();
             }
         }
@@ -177,6 +215,64 @@ public class MainActivity extends AppCompatActivity {
         if (mGpSNmea != null) {
             mGpSNmea.setText(mStatusStr);
         }
+    }
+
+    public void startNewTraining(){
+        mTrackingStarted = true;
+        mLastLocation = false;
+        detectionHelper = 0;
+        avgSpeedHelper = 0;
+        minimumAccuracy = Long.parseLong("10");
+
+        //Init kalman filter
+        //double kalman_speed = Double.parseDouble("1.0");
+        float kalman_speed = Float.parseFloat("1.0");
+        geoTrackFilter = new GeoTrackFilter(kalman_speed);
+    }
+
+    public void stopTraining(){
+        if(mTrackingStarted) {
+            mTrackingStarted = false;
+
+            //Reset variables
+            if(mLastLocation)
+                lastLocation.reset();
+            idTrace = -1;
+            lastLocationEntry = -1;
+        }
+    }
+
+    public void GetsmoothPoint() {
+        double lon =0;
+        double lat =0;
+        double correctLon =0;
+        double correctLat =0;
+        Calendar cal = Calendar.getInstance();
+        mtime = "2015-01-01 00:00:00";
+
+        if (mLocInfo != null) {
+            // 纠偏前的经度
+            lon = mLocInfo.getLongitude();
+            // 纠偏前的纬度
+            lat = mLocInfo.getLatitude();
+            double fixpoint[] = MapFixUtil.transform(lat, lon);
+            // 纠偏后的经度
+            correctLon = fixpoint[1];
+            // 纠偏后的纬度
+            correctLat = fixpoint[0];
+        }
+        Log.d(mTag, "纠偏前的经度：" + lon + ",纠偏前的纬度：" + lat);
+        Log.d(mTag, "纠偏后的经度：" + correctLon + ",纠偏后的纬度：" + correctLat);
+        // 时间BCD[6] yyy-MM-dd HH:mm:ss
+        int year = cal.get(Calendar.YEAR);
+        int month = cal.get(Calendar.MONTH) + 1;
+        int day = cal.get(Calendar.DAY_OF_MONTH);
+        int hour = cal.get(Calendar.HOUR_OF_DAY);
+        int min = cal.get(Calendar.MINUTE);
+        int sec = cal.get(Calendar.SECOND);
+        mtime = String.format("%d-%02d-%02d %02d:%02d:%02d", year,month, day, hour, min, sec);
+        //Writelog.i(mTag, "经度:%f,纬度:%f,方向:%d,时间:%s", mlongitude, mlatitude, mdirection, mtime);
+        refreshNmeaView(mfixStatusTv,"时间:"+mtime +" 经度:"+correctLat+ "纬度:"+correctLon+"\n");
     }
 
     /*
@@ -388,7 +484,7 @@ Calculate Current Estimated Value
         mfixStatusTv = (TextView) findViewById(R.id.tv_status);
         mGpSNmea.setMovementMethod(ScrollingMovementMethod.getInstance());
         mfixStatusTv.setMovementMethod(ScrollingMovementMethod.getInstance());
-
+        startNewTraining();
         bt = (Button)findViewById(R.id.bt);
         bt.setOnClickListener(new View.OnClickListener() {
             @Override
