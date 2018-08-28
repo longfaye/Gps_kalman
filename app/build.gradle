@@ -1,5 +1,9 @@
 apply plugin: 'com.android.application'
 
+def verreleaseTimeTag() {
+    return new Date().format("yyyyMMdd", TimeZone.getTimeZone("UTC"))
+}
+
 android {
     compileSdkVersion 25
     buildToolsVersion "25.0.2"
@@ -11,12 +15,57 @@ android {
         versionName "1.0"
         testInstrumentationRunner "android.support.test.runner.AndroidJUnitRunner"
     }
+
+    productFlavors {
+        x86 {
+            versionCode Integer.parseInt("6" + defaultConfig.versionCode)
+            ndk {
+                abiFilter "x86"
+            }
+        }
+        mips {
+            versionCode Integer.parseInt("4" + defaultConfig.versionCode)
+            ndk {
+                abiFilter "mips"
+            }
+        }
+        armv7 {
+            versionCode Integer.parseInt("2" + defaultConfig.versionCode)
+            ndk {
+                abiFilter "armeabi-v7a"
+            }
+        }
+        arm {
+            versionCode Integer.parseInt("1" + defaultConfig.versionCode)
+            ndk {
+                abiFilter "armeabi"
+            }
+        }
+        fat
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+
+    applicationVariants.all { variant ->
+        variant.outputs.each { output ->
+            def outputFile = output.outputFile
+            def fileName
+            if (outputFile != null && outputFile.name.endsWith('.apk')) {
+                if (variant.buildType.name.equals('release')) {
+                    fileName = outputFile.name.replace("app-arm","${defaultConfig.applicationId }_${defaultConfig.versionName}_${verreleaseTimeTag()}")
+                } else if (variant.buildType.name.equals('debug')) {
+                    fileName = outputFile.name.replace("app-arm","${defaultConfig.applicationId }_${defaultConfig.versionName}_${verreleaseTimeTag()}")
+                }
+                output.outputFile = new File(outputFile.parent, fileName)
+            }
+        }
+    }
+
 }
 
 dependencies {
